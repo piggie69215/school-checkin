@@ -110,10 +110,9 @@
                 if (!window.firebaseEnv || !window.firebaseEnv.auth.currentUser) return;
                 
                 const { db, appId, auth, doc, onSnapshot } = window.firebaseEnv;
-                const userId = auth.currentUser.uid;
                 
-                // 依據規定，資料必須存放於 /artifacts/{appId}/users/{userId}/{collectionName}
-                const docRef = doc(db, 'artifacts', appId, 'users', userId, collectionName, documentId);
+                // 💡 修正：將路徑改為公開共用路徑 (public/data)，讓不同電腦的匿名登入都能讀取同一個檔案
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, documentId);
 
                 // 設定監聽器：當雲端資料變動時，即時更新本地 React 狀態
                 const unsubscribe = onSnapshot(docRef, (snapshot) => {
@@ -151,8 +150,9 @@
                     const finalValue = newValueOrFunction instanceof Function ? newValueOrFunction(prevData) : newValueOrFunction;
                     
                     const { db, appId, auth, doc, setDoc } = window.firebaseEnv;
-                    const userId = auth.currentUser.uid;
-                    const docRef = doc(db, 'artifacts', appId, 'users', userId, collectionName, documentId);
+                    
+                    // 💡 修正：寫入時同樣指向公開共用路徑
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, documentId);
 
                     // 確保複雜物件或陣列可以正確序列化儲存
                     const payload = (typeof finalValue === 'object' && !Array.isArray(finalValue)) 

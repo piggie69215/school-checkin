@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>⭐學生打卡＆數位聯絡簿 (Firebase雲端版)⭐</title>
+    <title>⭐學生打卡＆數位聯絡簿 (Firebase每日歷史版)⭐</title>
     
     <!-- 引入 Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -41,16 +41,15 @@
 <body>
     <div id="root"></div>
 
-    <!-- 💡 核心修改 1：使用 ES Module 載入 Firebase (版本需為 11.6.1 以上) -->
+    <!-- 使用 ES Module 載入 Firebase 11.6.1 -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // 系統會自動帶入專屬的 app_id 與 firebase_config (供線上環境預覽使用)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-school-app'; 
         
-        // 👇👇👇 串接你自己的 Firebase，請將你的 Config 貼在這裡 👇👇👇
+        // 專屬 Firebase Config
         const myFirebaseConfig = {
             apiKey: "AIzaSyBxCT6josgRNm4OqrjVODnvW0bhMyxW7Wk",
             authDomain: "school-checkin-3f057.firebaseapp.com",
@@ -66,25 +65,24 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // 初始化全域的 firebase 掛載點，供 Babel 編譯後的 React 元件呼叫
+        // 掛載於全域供 React 元件呼叫
         window.firebaseEnv = { auth, db, appId, doc, setDoc, onSnapshot };
 
-        // 登入驗證（單機使用匿名驗證即可，平台若有提供 Token 則優先使用）
+        // 登入驗證
         if (typeof __initial_auth_token !== 'undefined') {
             await signInWithCustomToken(auth, __initial_auth_token);
         } else {
             await signInAnonymously(auth);
         }
 
-        // 觸發 React 渲染（確保 Firebase 連線後才啟動 UI）
+        // 觸發 React 渲染
         window.dispatchEvent(new CustomEvent('firebase-ready'));
     </script>
 
-    <!-- 💡 使用自訂的 react-classic preset 編譯核心元件 -->
     <script type="text/babel" data-presets="react-classic">
         const { useState, useEffect, useCallback, useMemo } = React;
 
-        // --- 內建圖示庫 (保持不變) ---
+        // --- 內建圖示庫 ---
         const IconBase = ({ size = 24, className = "", children }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>
         );
@@ -100,8 +98,9 @@
         const Star = (p) => <IconBase {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></IconBase>;
         const FileText = (p) => <IconBase {...p}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></IconBase>;
         const Cloud = (p) => <IconBase {...p}><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></IconBase>;
+        const Calendar = (p) => <IconBase {...p}><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></IconBase>;
 
-        // 💡 核心修改 2：替換掉 useLocalStorage，改為使用 Firebase 即時同步的 useFirebaseSync
+        // 即時雙向同步 Hook (公開路徑)
         function useFirebaseSync(collectionName, documentId, initialValue) {
             const [data, setData] = useState(initialValue);
             const [isLoaded, setIsLoaded] = useState(false);
@@ -109,20 +108,15 @@
             useEffect(() => {
                 if (!window.firebaseEnv || !window.firebaseEnv.auth.currentUser) return;
                 
-                const { db, appId, auth, doc, onSnapshot } = window.firebaseEnv;
-                
-                // 💡 修正：將路徑改為公開共用路徑 (public/data)，讓不同電腦的匿名登入都能讀取同一個檔案
+                const { db, appId, doc, onSnapshot } = window.firebaseEnv;
                 const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, documentId);
 
-                // 設定監聽器：當雲端資料變動時，即時更新本地 React 狀態
                 const unsubscribe = onSnapshot(docRef, (snapshot) => {
                     if (snapshot.exists()) {
-                        // Firebase 若無資料，則套用本地預設值 (確保結構完整)
                         const fetchedData = snapshot.data();
                         if (typeof initialValue === 'object' && !Array.isArray(initialValue)) {
                              setData({ ...initialValue, ...fetchedData });
                         } else {
-                             // 若存放的資料為陣列，因為存進去時有先 stringify (避開 Firebase 巢狀陣列限制)，所以需要 parse
                              try {
                                  setData(typeof fetchedData.value === 'string' ? JSON.parse(fetchedData.value) : fetchedData.value);
                              } catch(e) {
@@ -130,37 +124,30 @@
                              }
                         }
                     } else {
-                        // 若雲端完全無此文件，先寫入預設值
                         setData(initialValue);
                     }
                     setIsLoaded(true);
                 }, (error) => {
-                    console.error("Firestore 同步發生錯誤:", error);
-                    setIsLoaded(true); // 即便錯誤也允許渲染，降級使用暫存狀態
+                    console.error("Firestore 同步失敗:", error);
+                    setIsLoaded(true);
                 });
 
                 return () => unsubscribe();
             }, [collectionName, documentId]);
 
-            // 寫入資料到 Firebase
             const setValue = useCallback(async (newValueOrFunction) => {
                 if (!window.firebaseEnv || !window.firebaseEnv.auth.currentUser) return;
                 
                 setData((prevData) => {
                     const finalValue = newValueOrFunction instanceof Function ? newValueOrFunction(prevData) : newValueOrFunction;
-                    
-                    const { db, appId, auth, doc, setDoc } = window.firebaseEnv;
-                    
-                    // 💡 修正：寫入時同樣指向公開共用路徑
+                    const { db, appId, doc, setDoc } = window.firebaseEnv;
                     const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, documentId);
 
-                    // 確保複雜物件或陣列可以正確序列化儲存
                     const payload = (typeof finalValue === 'object' && !Array.isArray(finalValue)) 
                                     ? finalValue 
                                     : { value: Array.isArray(finalValue) ? JSON.stringify(finalValue) : finalValue };
 
                     setDoc(docRef, payload, { merge: true }).catch(err => console.error("Firestore 寫入失敗:", err));
-                    
                     return finalValue;
                 });
             }, [collectionName, documentId]);
@@ -168,7 +155,7 @@
             return [data, setValue, isLoaded];
         }
 
-        // --- 時鐘元件 (保持不變) ---
+        // --- 時鐘元件 ---
         const ClockDisplay = ({ clockStyleIndex, onClick }) => {
           const [time, setTime] = useState(new Date());
           useEffect(() => {
@@ -205,14 +192,21 @@
             setTimeout(() => setToastMessage(''), 3500);
           }, []);
 
-          // 💡 核心修改 3：將原本的 useLocalStorage 改接 useFirebaseSync
+          // 💡 實時真實日期狀態（支援午夜跨日與螢幕喚醒自動刷新）
+          const [realToday, setRealToday] = useState(new Date());
+
+          // 雲端資料同步狀態
           const [settings, setSettings, isSettingsLoaded] = useFirebaseSync('config', 'system_settings', {
             totalStudents: 30, idealTime: '07:30', taskEndTime: '08:30', cbDirection: 'horizontal',
             cbFont: 'sans', cbFontSize: 32, clockStyle: 0, viewMode: 'both', showTasks: true,
             showListNumber: true, emptyIds: '', leaveIds: '', clubIds: '', bulkText: '', 
           });
 
-          const [students, setStudents, isStudentsLoaded] = useFirebaseSync('data', 'students_list', []);
+          // 舊版單機名單（保留向下相容讀取）
+          const [legacyStudents, setLegacyStudents, isLegacyStudentsLoaded] = useFirebaseSync('data', 'students_list', []);
+          
+          // 💡 每日打卡歷史紀錄字典: { "2026-09-03": [ { id, name, type, arrivalTime, status } ] }
+          const [attendanceRecords, setAttendanceRecords, isAttendanceLoaded] = useFirebaseSync('data', 'daily_attendance_records', {});
           const [contactBookData, setContactBookData, isCbLoaded] = useFirebaseSync('data', 'contact_book_records', {});
           const [taskData, setTaskData, isTaskLoaded] = useFirebaseSync('data', 'task_records', {});
           
@@ -222,7 +216,7 @@
           const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
           const [unlockId, setUnlockId] = useState('');
 
-          const isMounted = isSettingsLoaded && isStudentsLoaded && isCbLoaded && isTaskLoaded;
+          const isMounted = isSettingsLoaded && isLegacyStudentsLoaded && isAttendanceLoaded && isCbLoaded && isTaskLoaded;
 
           const formatDateKey = useCallback((date) => {
             if (!date) return new Date().toISOString().split('T')[0];
@@ -231,82 +225,154 @@
             return d.toISOString().split('T')[0];
           }, []);
 
-          const currentViewDateKey = formatDateKey(viewDate);
+          // 💡 監聽午夜跨日與大螢幕睡眠喚醒（完全不需手動 F5 重新整理）
+          useEffect(() => {
+            const checkMidnight = () => {
+              const now = new Date();
+              setRealToday(prev => {
+                if (formatDateKey(prev) !== formatDateKey(now)) {
+                  return now;
+                }
+                return prev;
+              });
+            };
 
-          // 預設寫入當日的測試資料
+            // 每 10 秒檢查一次日曆是否跨日
+            const timer = setInterval(checkMidnight, 10000);
+
+            // 當隔天學生開啟大螢幕、觸碰或瀏覽器獲得焦點時立刻觸發檢查
+            const handleWakeUp = () => {
+              if (document.visibilityState === 'visible') checkMidnight();
+            };
+            window.addEventListener('focus', checkMidnight);
+            document.addEventListener('visibilitychange', handleWakeUp);
+
+            return () => {
+              clearInterval(timer);
+              window.removeEventListener('focus', checkMidnight);
+              document.removeEventListener('visibilitychange', handleWakeUp);
+            };
+          }, [formatDateKey]);
+
+          const currentViewDateKey = formatDateKey(viewDate);
+          const todayDateKey = formatDateKey(realToday);
+          const isViewingToday = currentViewDateKey === todayDateKey;
+
+          // 💡 防呆機制：如果老師前一天忘記按「後一天」，隔天早晨喚醒時自動推進至今天
+          useEffect(() => {
+            if (!isMounted) return;
+            const currentView = formatDateKey(viewDate);
+            const realTodayStr = formatDateKey(realToday);
+            // 若畫面上顯示的日期早於真實今天，自動切換至今天
+            if (currentView < realTodayStr) {
+              setViewDate(realToday);
+            }
+          }, [realToday, isMounted, formatDateKey]);
+
+          // 根據全班設定生成基礎學生清單
+          const generateBaseStudentList = useCallback(() => {
+            let baseList = Array.from({ length: settings.totalStudents || 30 }, (_, i) => ({ id: i + 1, name: '', type: 'normal', arrivalTime: null, status: 'absent' }));
+            const safeEmptyIds = settings.emptyIds || '';
+            const safeImportText = settings.bulkText || '';
+            const emptyArr = safeEmptyIds.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+            if (safeImportText.trim() !== '') {
+              const lines = safeImportText.split('\n').filter(l => l.trim() !== '');
+              let autoId = 1;
+              lines.forEach((line) => {
+                let name = line.trim();
+                let id = null;
+                const match = line.match(/^(\d+)[\s,\.\t]+(.+)$/);
+                if (match) {
+                  id = parseInt(match[1], 10);
+                  name = match[2].trim();
+                  autoId = id + 1; 
+                } else if (/^\d+$/.test(name)) {
+                   id = parseInt(name, 10);
+                   name = '';
+                   autoId = id + 1;
+                } else {
+                   while (emptyArr.includes(autoId) && autoId <= (settings.totalStudents || 30)) { autoId++; }
+                   id = autoId;
+                   autoId++; 
+                }
+                const student = baseList.find(s => s.id === id);
+                if (student) {
+                  student.name = name;
+                  if (name === '空號') student.type = 'empty';
+                }
+              });
+            }
+
+            const leaveArr = (settings.leaveIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+            const clubArr = (settings.clubIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+
+            return baseList.map(base => {
+              let finalType = base.type;
+              if (emptyArr.includes(base.id)) finalType = 'empty';
+              else if (leaveArr.includes(base.id)) finalType = 'leave';
+              else if (clubArr.includes(base.id)) finalType = 'club';
+              return { ...base, type: finalType };
+            });
+          }, [settings.totalStudents, settings.emptyIds, settings.leaveIds, settings.clubIds, settings.bulkText]);
+
+          // 自動為今天建立初始打卡清單，或遷移舊版打卡紀錄
+          useEffect(() => {
+            if (!isMounted) return;
+            
+            setAttendanceRecords(prev => {
+              // 若今天已經有紀錄，檢查學生名單長度是否需與設定同步
+              if (prev && prev[todayDateKey] && Array.isArray(prev[todayDateKey])) {
+                const todayList = prev[todayDateKey];
+                // 如果今天名單人數與設定總人數相符，無須重新產生
+                if (todayList.length === (settings.totalStudents || 30)) return prev;
+              }
+
+              const baseList = generateBaseStudentList();
+              
+              // 💡 無縫相容升級：如果舊版 students_list 中有當日已打卡的紀錄，自動保留並搬移
+              const legacyHasCheckin = legacyStudents && legacyStudents.some(s => s.arrivalTime);
+              let initialDayList = baseList;
+              
+              if (legacyHasCheckin && (!prev || !prev[todayDateKey])) {
+                initialDayList = baseList.map(b => {
+                  const old = legacyStudents.find(l => l.id === b.id);
+                  if (old && old.arrivalTime) {
+                    return { ...b, arrivalTime: old.arrivalTime, status: old.status };
+                  }
+                  return b;
+                });
+              }
+
+              return {
+                ...(prev || {}),
+                [todayDateKey]: initialDayList
+              };
+            });
+          }, [isMounted, todayDateKey, generateBaseStudentList, settings.totalStudents]);
+
+          // 當前所檢視日期的學生打卡名單
+          const currentDayStudents = useMemo(() => {
+            if (attendanceRecords && attendanceRecords[currentViewDateKey] && Array.isArray(attendanceRecords[currentViewDateKey])) {
+              return attendanceRecords[currentViewDateKey];
+            }
+            // 若該歷史日期完全無紀錄，動態產生當日預設名單供檢視
+            return generateBaseStudentList();
+          }, [attendanceRecords, currentViewDateKey, generateBaseStudentList]);
+
+          // 預設今日聯絡簿測試資料
           useEffect(() => {
             if (!isMounted) return;
             const isWeekend = viewDate.getDay() === 0 || viewDate.getDay() === 6;
-            const isToday = currentViewDateKey === formatDateKey(new Date());
+            const isToday = currentViewDateKey === todayDateKey;
             
-            // 避免在還沒載入雲端資料時就覆蓋
             if (Object.keys(contactBookData).length === 0 && isToday && !isWeekend) {
                  setContactBookData(prev => ({ ...prev, [currentViewDateKey]: "國習P.30-P.32\n國作L3\n數作Ch.3\n明帶水彩用具\n交午餐回條\n做家事" }));
                  setTaskData(prev => ({ ...prev, [currentViewDateKey]: "靜心晨讀10分鐘\n繳交今日作業\n抄寫聯絡簿" }));
             }
-          }, [currentViewDateKey, isMounted]);
+          }, [currentViewDateKey, isMounted, todayDateKey]);
 
-          // 自動生成與補齊學生列表 (當設定有更改，或是初次啟動時)
-          useEffect(() => {
-            if (!isMounted) return;
-            
-            // 防抖動處理：因為每次儲存學生都會重刷，若雲端已載入學生且數量與設定相同，則避免過度重算
-            if (students.length === settings.totalStudents && settings.bulkText === '') return;
-
-            setStudents(prev => {
-              let baseList = Array.from({ length: settings.totalStudents }, (_, i) => ({ id: i + 1, name: '', type: 'normal' }));
-              const safeEmptyIds = settings.emptyIds || '';
-              const safeImportText = settings.bulkText || '';
-              const emptyArr = safeEmptyIds.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-
-              if (safeImportText.trim() !== '') {
-                const lines = safeImportText.split('\n').filter(l => l.trim() !== '');
-                let autoId = 1;
-                lines.forEach((line) => {
-                  let name = line.trim();
-                  let id = null;
-                  const match = line.match(/^(\d+)[\s,\.\t]+(.+)$/);
-                  if (match) {
-                    id = parseInt(match[1], 10);
-                    name = match[2].trim();
-                    autoId = id + 1; 
-                  } else if (/^\d+$/.test(name)) {
-                     id = parseInt(name, 10);
-                     name = '';
-                     autoId = id + 1;
-                  } else {
-                     while (emptyArr.includes(autoId) && autoId <= settings.totalStudents) { autoId++; }
-                     id = autoId;
-                     autoId++; 
-                  }
-                  const student = baseList.find(s => s.id === id);
-                  if (student) {
-                    student.name = name;
-                    if (name === '空號') student.type = 'empty';
-                  }
-                });
-              }
-
-              const leaveArr = (settings.leaveIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-              const clubArr = (settings.clubIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-
-              const mappedList = baseList.map(base => {
-                const existing = prev.find(s => s.id === base.id) || { arrivalTime: null, status: 'absent' };
-                let finalType = base.type;
-                if (emptyArr.includes(base.id)) finalType = 'empty';
-                else if (leaveArr.includes(base.id)) finalType = 'leave';
-                else if (clubArr.includes(base.id)) finalType = 'club';
-
-                return { ...base, type: finalType, arrivalTime: existing.arrivalTime, status: existing.status };
-              });
-              
-              // 檢查是否有實質變化，有變化才觸發寫入，避免無限迴圈
-              const isChanged = JSON.stringify(prev) !== JSON.stringify(mappedList);
-              return isChanged ? mappedList : prev;
-            });
-          }, [settings.totalStudents, settings.emptyIds, settings.leaveIds, settings.clubIds, settings.bulkText, isMounted]);
-
-          // 拖曳 UI 面板邏輯 (保持不變)
+          // 拖曳分隔線邏輯
           useEffect(() => {
             const handleMouseMove = (e) => {
               if (isDraggingH) {
@@ -346,22 +412,46 @@
             };
           }, [isDraggingH, isDraggingV, isDraggingTaskW]);
 
-          // 打卡邏輯
+          // 學生點擊打卡（寫入當前日期的雲端紀錄）
           const handleCheckIn = useCallback((id) => {
-            setStudents(prev => prev.map(s => {
-              if (s.id !== id || s.type !== 'normal' || s.status !== 'absent') return s;
-              const now = new Date();
-              const timeStr = now.toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' });
-              const [h, m] = (settings.idealTime || '07:30').split(':').map(Number);
-              const ideal = new Date(); ideal.setHours(h, m, 0, 0);
-              return { ...s, arrivalTime: timeStr, status: now <= ideal ? 'on-time' : 'late' };
-            }));
-          }, [settings.idealTime, setStudents]);
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('zh-TW', { hour12: false, hour: '2-digit', minute: '2-digit' });
+            const [h, m] = (settings.idealTime || '07:30').split(':').map(Number);
+            const ideal = new Date(); ideal.setHours(h, m, 0, 0);
+            const status = now <= ideal ? 'on-time' : 'late';
 
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updatedList = currentList.map(s => {
+                if (s.id !== id || s.type !== 'normal' || s.status !== 'absent') return s;
+                return { ...s, arrivalTime: timeStr, status };
+              });
+              return { ...prev, [currentViewDateKey]: updatedList };
+            });
+          }, [settings.idealTime, currentViewDateKey, currentDayStudents, setAttendanceRecords]);
+
+          // 強制解鎖特定座號（針對當前檢視日期）
           const handleUnlock = () => {
             const id = parseInt(unlockId);
-            setStudents(prev => prev.map(s => s.id === id ? { ...s, arrivalTime: null, status: 'absent' } : s));
+            if (isNaN(id)) return;
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updatedList = currentList.map(s => s.id === id ? { ...s, arrivalTime: null, status: 'absent' } : s);
+              return { ...prev, [currentViewDateKey]: updatedList };
+            });
             setUnlockId('');
+            showToast(`✅ 座號 ${id} 已於 ${currentViewDateKey} 解鎖！`);
+          };
+
+          // 重置當日打卡狀態
+          const handleResetCurrentDay = () => {
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updatedList = currentList.map(s => ({ ...s, arrivalTime: null, status: 'absent' }));
+              return { ...prev, [currentViewDateKey]: updatedList };
+            });
+            setIsResetConfirmOpen(false);
+            showToast(`✅ ${currentViewDateKey} 打卡狀態已重置為未到！`);
           };
 
           const triggerDownload = (content, fileName, mimeType) => {
@@ -382,18 +472,19 @@
             }
           };
 
+          // 匯出當前檢視日期的 CSV 報表
           const exportCSV = () => {
-            const dateStr = formatDateKey(viewDate);
+            const dateStr = currentViewDateKey;
             const cbText = (contactBookData[currentViewDateKey] || '').replace(/"/g, '""');
             const taskText = (taskData[currentViewDateKey] || '').replace(/"/g, '""');
             
             const currentStats = {
-              total: students.filter(s => s.type !== 'empty').length,
-              present: students.filter(s => (s.status === 'on-time' || s.status === 'late')).length,
-              late: students.filter(s => s.status === 'late').length,
-              absent: students.filter(s => s.status === 'absent' && s.type === 'normal').length,
-              leave: students.filter(s => s.type === 'leave').length,
-              club: students.filter(s => s.type === 'club').length,
+              total: currentDayStudents.filter(s => s.type !== 'empty').length,
+              present: currentDayStudents.filter(s => (s.status === 'on-time' || s.status === 'late')).length,
+              late: currentDayStudents.filter(s => s.status === 'late').length,
+              absent: currentDayStudents.filter(s => s.status === 'absent' && s.type === 'normal').length,
+              leave: currentDayStudents.filter(s => s.type === 'leave').length,
+              club: currentDayStudents.filter(s => s.type === 'club').length,
             };
 
             let csvContent = '\uFEFF'; 
@@ -404,7 +495,7 @@
             csvContent += `${currentStats.total},${currentStats.present},${currentStats.late},${currentStats.absent},${currentStats.leave},${currentStats.club}\n\n`;
             csvContent += `【學生打卡明細】\n座號,姓名,狀態,打卡時間\n`;
             
-            students.forEach(s => {
+            currentDayStudents.forEach(s => {
               if (s.type === 'empty') return;
               let statusText = '未到';
               if (s.status === 'on-time') statusText = '準時';
@@ -419,11 +510,13 @@
             triggerDownload(csvContent, `⭐學生打卡報表_${dateStr}.csv`, 'text/csv;charset=utf-8;');
           };
 
+          // 完整系統備份（含全部歷史出缺席紀錄）
           const exportData = () => {
-            const data = { settings, students, contactBookData, taskData };
-            triggerDownload(JSON.stringify(data), `⭐學生打卡＆數位聯絡簿⭐_備份_${formatDateKey(new Date())}.json`, 'application/json');
+            const data = { settings, contactBookData, taskData, attendanceRecords };
+            triggerDownload(JSON.stringify(data), `⭐學生打卡＆數位聯絡簿⭐_完整備份_${formatDateKey(new Date())}.json`, 'application/json');
           };
 
+          // 還原備份
           const handleFileUpload = (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -432,21 +525,21 @@
               try {
                 const json = JSON.parse(event.target.result);
                 if (json.settings) {
-                  setSettings(prev => {
-                    const merged = { ...prev, ...json.settings };
-                    merged.emptyIds = merged.emptyIds || '';
-                    merged.leaveIds = merged.leaveIds || '';
-                    merged.clubIds = merged.clubIds || '';
-                    merged.bulkText = merged.bulkText || '';
-                    merged.cbDirection = merged.cbDirection || 'horizontal';
-                    merged.cbFont = merged.cbFont || 'sans';
-                    return merged;
-                  });
+                  setSettings(prev => ({
+                    ...prev,
+                    ...json.settings,
+                    emptyIds: json.settings.emptyIds || '',
+                    leaveIds: json.settings.leaveIds || '',
+                    clubIds: json.settings.clubIds || '',
+                    bulkText: json.settings.bulkText || '',
+                    cbDirection: json.settings.cbDirection || 'horizontal',
+                    cbFont: json.settings.cbFont || 'sans'
+                  }));
                 }
-                if (json.students) setStudents(json.students);
                 if (json.contactBookData) setContactBookData(prev => ({ ...prev, ...json.contactBookData }));
                 if (json.taskData) setTaskData(prev => ({ ...prev, ...json.taskData }));
-                showToast('✅ 匯入並上傳至雲端成功！');
+                if (json.attendanceRecords) setAttendanceRecords(prev => ({ ...prev, ...json.attendanceRecords }));
+                showToast('✅ 備份資料已還原並同步至雲端！');
               } catch (err) { showToast('❌ 匯入失敗，檔案格式不正確。'); }
             };
             reader.readAsText(file);
@@ -457,18 +550,18 @@
             return (
               <div className="min-h-screen w-full bg-[#f3f4f6] flex flex-col items-center justify-center font-sans">
                 <div className="w-12 h-12 border-4 border-pink-200 border-t-pink-500 rounded-full animate-spin mb-4"></div>
-                <h2 className="text-xl font-black text-slate-600 tracking-widest flex items-center gap-2">連線至 Firebase 雲端環境中... <Cloud className="text-blue-400"/></h2>
+                <h2 className="text-xl font-black text-slate-600 tracking-widest flex items-center gap-2">連線至 Firebase 雲端資料庫中... <Cloud className="text-blue-400"/></h2>
               </div>
             );
           }
 
           const stats = {
-            total: students.filter(s => s.type !== 'empty').length,
-            present: students.filter(s => (s.status === 'on-time' || s.status === 'late')).length,
-            late: students.filter(s => s.status === 'late').length,
-            absent: students.filter(s => s.status === 'absent' && s.type === 'normal').length,
-            leave: students.filter(s => s.type === 'leave').length,
-            club: students.filter(s => s.type === 'club').length,
+            total: currentDayStudents.filter(s => s.type !== 'empty').length,
+            present: currentDayStudents.filter(s => (s.status === 'on-time' || s.status === 'late')).length,
+            late: currentDayStudents.filter(s => s.status === 'late').length,
+            absent: currentDayStudents.filter(s => s.status === 'absent' && s.type === 'normal').length,
+            leave: currentDayStudents.filter(s => s.type === 'leave').length,
+            club: currentDayStudents.filter(s => s.type === 'club').length,
           };
 
           const parseListContent = (text) => text ? text.split('\n').map(line => line.trim()).filter(line => line.length > 0) : [];
@@ -533,7 +626,14 @@
                   <div className="bg-gradient-to-r from-yellow-400 to-pink-500 p-2.5 rounded-xl shadow-sm rotate-3">
                     <Star className="text-white w-5 h-5 fill-current pointer-events-none" />
                   </div>
-                  <h1 className="text-xl md:text-2xl font-black text-slate-700 pointer-events-none">⭐學生打卡＆數位聯絡簿<span className="text-sm font-bold text-pink-500 ml-2 border border-pink-200 bg-pink-50 px-2 py-0.5 rounded-full"><Cloud className="inline w-4 h-4 mr-1"/>雲端同步中</span></h1>
+                  <div>
+                    <h1 className="text-xl md:text-2xl font-black text-slate-700 pointer-events-none flex items-center">
+                      ⭐學生打卡＆數位聯絡簿
+                      <span className="text-xs font-bold text-emerald-600 ml-2 border border-emerald-200 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <Cloud className="w-3.5 h-3.5"/>每日自動同步
+                      </span>
+                    </h1>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 md:gap-3 flex-wrap">
@@ -549,21 +649,21 @@
                     </button>
                   </div>
                   
-                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsResetConfirmOpen(true); }} className="flex items-center gap-2 px-4 py-2.5 md:px-5 md:py-3 text-slate-600 hover:bg-slate-100 hover:text-pink-500 rounded-xl text-sm font-bold transition-colors">
-                    <RotateCcw size={20} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">重置</span>
+                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsResetConfirmOpen(true); }} className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 text-slate-600 hover:bg-rose-50 hover:text-rose-600 rounded-xl text-sm font-bold transition-colors" title="重置當前日期的打卡">
+                    <RotateCcw size={18} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">重置該日</span>
                   </button>
-                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); exportCSV(); }} className="flex items-center gap-2 px-4 py-2.5 md:px-5 md:py-3 text-slate-600 hover:bg-slate-100 hover:text-green-600 rounded-xl text-sm font-bold transition-colors" title="匯出報表">
-                    <FileText size={20} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">CSV報表</span>
+                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); exportCSV(); }} className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 text-slate-600 hover:bg-emerald-50 hover:text-green-600 rounded-xl text-sm font-bold transition-colors" title="匯出當日報表">
+                    <FileText size={18} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">當日報表</span>
                   </button>
-                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); exportData(); }} className="flex items-center gap-2 px-4 py-2.5 md:px-5 md:py-3 text-slate-600 hover:bg-slate-100 hover:text-blue-500 rounded-xl text-sm font-bold transition-colors" title="匯出完整備份">
-                    <Download size={20} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">匯出</span>
+                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); exportData(); }} className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 text-slate-600 hover:bg-blue-50 hover:text-blue-500 rounded-xl text-sm font-bold transition-colors" title="匯出含歷史紀錄的完整備份">
+                    <Download size={18} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">備份</span>
                   </button>
-                  <label className="flex items-center gap-2 px-4 py-2.5 md:px-5 md:py-3 text-slate-600 hover:bg-slate-100 hover:text-emerald-500 rounded-xl text-sm font-bold transition-colors cursor-pointer m-0 relative overflow-hidden" title="還原備份">
-                    <Upload size={20} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">匯入</span>
+                  <label className="flex items-center gap-1.5 px-3 py-2 md:px-4 md:py-2.5 text-slate-600 hover:bg-slate-100 hover:text-emerald-500 rounded-xl text-sm font-bold transition-colors cursor-pointer m-0 relative overflow-hidden" title="還原備份">
+                    <Upload size={18} className="pointer-events-none"/> <span className="hidden sm:inline pointer-events-none">還原</span>
                     <input type="file" className="absolute top-0 left-0 w-full h-full opacity-0 cursor-pointer" accept=".json" onChange={(e) => { e.stopPropagation(); handleFileUpload(e); }}/>
                   </label>
-                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsSettingsOpen(true); }} className="flex items-center gap-2 ml-1 px-5 py-2.5 md:px-6 md:py-3 bg-slate-100 text-slate-700 hover:bg-pink-100 hover:text-pink-600 rounded-xl text-sm font-black transition-colors border border-slate-200 shadow-sm">
-                    <Settings size={20} className="pointer-events-none"/> <span className="pointer-events-none">設定</span>
+                  <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsSettingsOpen(true); }} className="flex items-center gap-2 ml-1 px-4 py-2 md:px-5 md:py-2.5 bg-slate-100 text-slate-700 hover:bg-pink-100 hover:text-pink-600 rounded-xl text-sm font-black transition-colors border border-slate-200 shadow-sm">
+                    <Settings size={18} className="pointer-events-none"/> <span className="pointer-events-none">設定</span>
                   </button>
                 </div>
               </header>
@@ -574,22 +674,38 @@
                     <div className="absolute top-4 left-4 opacity-5 pointer-events-none rotate-12"><Star size={40} className="text-pink-400 fill-current"/></div>
                     <div className="absolute bottom-4 right-4 opacity-5 pointer-events-none -rotate-12"><Star size={60} className="text-blue-400 fill-current"/></div>
 
-                    <div className="pt-4 pb-2 flex flex-col items-center shrink-0 z-10">
+                    <div className="pt-3 pb-2 flex flex-col items-center shrink-0 z-10">
+                      {/* 當日與歷史狀態提示 */}
+                      <div className="mb-2 flex items-center gap-2">
+                        {isViewingToday ? (
+                          <span className="bg-emerald-100 text-emerald-800 text-xs font-black px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>今日打卡中
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2 bg-amber-100 border border-amber-300 text-amber-900 text-xs font-black px-3 py-1 rounded-full shadow-sm">
+                            <Calendar size={14} className="text-amber-700"/>
+                            <span>檢視歷史紀錄 ({currentViewDateKey})</span>
+                            <button type="button" onClickCapture={(e) => { e.stopPropagation(); setViewDate(new Date()); }} className="bg-amber-600 hover:bg-amber-700 text-white px-2 py-0.5 rounded-full font-bold transition-transform active:scale-95">回到今天</button>
+                          </div>
+                        )}
+                      </div>
+
                       <ClockDisplay clockStyleIndex={settings.clockStyle} onClick={() => setSettings({...settings, clockStyle: ((settings.clockStyle || 0) + 1) % 5})} />
-                      <div className="mt-4 flex flex-wrap justify-center gap-2 md:gap-3 px-2 w-full overflow-x-auto custom-scrollbar pb-2">
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-blue-200 bg-blue-50/80 text-blue-600 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-blue-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">應到:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.total}</span></div>
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-emerald-200 bg-emerald-50/80 text-emerald-600 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-emerald-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">已到:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.present}</span></div>
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-red-200 bg-red-50/80 text-red-600 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-red-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">遲到:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.late}</span></div>
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-amber-300 bg-amber-50/80 text-amber-700 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-amber-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">未到:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.absent}</span></div>
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-purple-200 bg-purple-50/80 text-purple-600 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-purple-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">請假:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.leave}</span></div>
-                        <div className="flex items-baseline gap-2 px-4 py-1.5 md:px-6 md:py-1.5 rounded-full border border-cyan-200 bg-cyan-50/80 text-cyan-600 shadow-sm min-w-[80px] md:min-w-[100px] justify-center transition-all hover:bg-cyan-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">社團:</span><span className="text-lg md:text-xl font-black pointer-events-none">{stats.club}</span></div>
+                      
+                      <div className="mt-3 flex flex-wrap justify-center gap-1.5 md:gap-2.5 px-2 w-full overflow-x-auto custom-scrollbar pb-1">
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-blue-200 bg-blue-50/80 text-blue-600 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-blue-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">應到:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.total}</span></div>
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-emerald-200 bg-emerald-50/80 text-emerald-600 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-emerald-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">已到:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.present}</span></div>
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-red-200 bg-red-50/80 text-red-600 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-red-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">遲到:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.late}</span></div>
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-amber-300 bg-amber-50/80 text-amber-700 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-amber-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">未到:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.absent}</span></div>
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-purple-200 bg-purple-50/80 text-purple-600 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-purple-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">請假:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.leave}</span></div>
+                        <div className="flex items-baseline gap-1.5 px-3 py-1 rounded-full border border-cyan-200 bg-cyan-50/80 text-cyan-600 shadow-sm min-w-[70px] md:min-w-[90px] justify-center transition-all hover:bg-cyan-100 shrink-0"><span className="text-[10px] md:text-xs font-bold opacity-80 pointer-events-none">社團:</span><span className="text-base md:text-lg font-black pointer-events-none">{stats.club}</span></div>
                       </div>
                     </div>
 
                     <div className="flex-1 p-2 md:p-4 z-10 flex flex-col overflow-hidden">
                       <div className="overflow-y-auto custom-scrollbar h-full w-full pr-1">
                         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 md:gap-2.5 w-full min-h-full" style={{ gridAutoRows: 'minmax(80px, 1fr)' }}>
-                          {students.map(s => {
+                          {currentDayStudents.map(s => {
                             if (s.type === 'empty') return <div key={s.id} className="flex items-center justify-center rounded-2xl bg-slate-50 text-slate-200 font-black text-xl border-2 border-dashed border-slate-100 w-full h-full min-h-[80px] pointer-events-none">{s.id}</div>;
                             
                             const isNormal = s.type === 'normal';
@@ -702,7 +818,7 @@
                 © 2026 鄭念慈 版權所有
               </footer>
 
-              {}
+              {/* 設定中心彈窗 */}
               {isSettingsOpen && (
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[999999] p-4">
                   <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -731,7 +847,7 @@
                         </div>
                         <div className="mb-4 flex items-center justify-between bg-rose-50 p-4 rounded-xl border border-rose-100 shadow-sm">
                           <div className="flex items-center gap-3">
-                            <Unlock className="text-rose-500 shrink-0 pointer-events-none" size={20}/><span className="text-sm md:text-base font-bold text-rose-700 shrink-0">強制解鎖:</span>
+                            <Unlock className="text-rose-500 shrink-0 pointer-events-none" size={20}/><span className="text-sm md:text-base font-bold text-rose-700 shrink-0">強制解鎖 ({currentViewDateKey}):</span>
                             <input type="number" placeholder="座號" className="w-20 md:w-24 p-2 border border-rose-200 rounded-lg text-base bg-white text-center focus:outline-none focus:ring-2 focus:ring-rose-300 transition-all" value={unlockId} onChange={(e)=>setUnlockId(e.target.value)}/>
                             <button type="button" onClickCapture={(e) => { e.stopPropagation(); handleUnlock(); }} className="px-4 py-2 bg-rose-500 text-white rounded-lg text-sm md:text-base font-bold hover:bg-rose-600 shadow-sm transition-colors">執行</button>
                           </div>
@@ -764,15 +880,17 @@
                 </div>
               )}
 
+              {/* 重置確認視窗（針對當日） */}
               {isResetConfirmOpen && (
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[999999] p-4">
                   <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl">
                     <div className="w-20 h-20 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6"><RotateCcw size={40} className="pointer-events-none"/></div>
-                    <h3 className="text-xl font-black text-slate-800 mb-3">確定重置打卡？</h3>
-                    <p className="text-slate-500 text-sm mb-6">所有的學生打卡狀態都將恢復為「未到」。</p>
+                    <h3 className="text-xl font-black text-slate-800 mb-2">確定重置打卡？</h3>
+                    <p className="text-pink-600 font-bold text-sm mb-2">日期：{currentViewDateKey}</p>
+                    <p className="text-slate-500 text-xs mb-6 leading-relaxed">該日所有的學生狀態都將恢復為「未到」。其他日期的歷史紀錄不會受到任何影響。</p>
                     <div className="flex gap-4">
-                      <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsResetConfirmOpen(false); }} className="flex-1 py-4 bg-slate-100 text-slate-600 font-bold rounded-xl transition-colors hover:bg-slate-200">取消</button>
-                      <button type="button" onClickCapture={(e) => { e.stopPropagation(); setStudents(prev => prev.map(s => ({ ...s, arrivalTime: null, status: 'absent' }))); setIsResetConfirmOpen(false); showToast('✅ 狀態已全部重置！'); }} className="flex-1 py-4 bg-red-500 text-white font-bold rounded-xl shadow-lg transition-colors hover:bg-red-600">確定</button>
+                      <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsResetConfirmOpen(false); }} className="flex-1 py-3.5 bg-slate-100 text-slate-600 font-bold rounded-xl transition-colors hover:bg-slate-200">取消</button>
+                      <button type="button" onClickCapture={(e) => { e.stopPropagation(); handleResetCurrentDay(); }} className="flex-1 py-3.5 bg-red-500 text-white font-bold rounded-xl shadow-lg transition-colors hover:bg-red-600">確定重置</button>
                     </div>
                   </div>
                 </div>
@@ -781,12 +899,11 @@
           );
         }
 
-        // 監聽 Firebase 準備就緒事件後才啟動 React，確保自訂 Hook 能取得到 auth 與 db
+        // 監聽 Firebase 準備就緒事件後啟動 React
         window.addEventListener('firebase-ready', () => {
              const root = ReactDOM.createRoot(document.getElementById('root'));
              root.render(<SchoolCheckInKing />);
         });
-        
     </script>
 </body>
 </html>

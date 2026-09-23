@@ -202,9 +202,6 @@
             showListNumber: true, emptyIds: '', leaveIds: '', clubIds: '', bulkText: '', 
           });
 
-          // 舊版單機名單（保留向下相容讀取）
-          const [legacyStudents, setLegacyStudents, isLegacyStudentsLoaded] = useFirebaseSync('data', 'students_list', []);
-          
           // 💡 每日打卡歷史紀錄字典: { "2026-09-03": [ { id, name, type, arrivalTime, status } ] }
           const [attendanceRecords, setAttendanceRecords, isAttendanceLoaded] = useFirebaseSync('data', 'daily_attendance_records', {});
           const [contactBookData, setContactBookData, isCbLoaded] = useFirebaseSync('data', 'contact_book_records', {});
@@ -215,8 +212,9 @@
           const [isSettingsOpen, setIsSettingsOpen] = useState(false);
           const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
           const [unlockId, setUnlockId] = useState('');
+          const [quickActionStudent, setQuickActionStudent] = useState(null); // 快速切換學生狀態彈窗
 
-          const isMounted = isSettingsLoaded && isLegacyStudentsLoaded && isAttendanceLoaded && isCbLoaded && isTaskLoaded;
+          const isMounted = isSettingsLoaded && isAttendanceLoaded && isCbLoaded && isTaskLoaded;
 
           const formatDateKey = useCallback((date) => {
             if (!date) return new Date().toISOString().split('T')[0];
@@ -269,7 +267,7 @@
             }
           }, [realToday, isMounted, formatDateKey]);
 
-          // 根據全班設定生成基礎學生清單
+          // 根據全班設定生成基礎學生清單 (僅空號為跨日通用，請假與社團改為當日專屬)
           const generateBaseStudentList = useCallback(() => {
             let baseList = Array.from({ length: settings.totalStudents || 30 }, (_, i) => ({ id: i + 1, name: '', type: 'normal', arrivalTime: null, status: 'absent' }));
             const safeEmptyIds = settings.emptyIds || '';
@@ -304,19 +302,14 @@
               });
             }
 
-            const leaveArr = (settings.leaveIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-            const clubArr = (settings.clubIds || '').split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-
             return baseList.map(base => {
               let finalType = base.type;
               if (emptyArr.includes(base.id)) finalType = 'empty';
-              else if (leaveArr.includes(base.id)) finalType = 'leave';
-              else if (clubArr.includes(base.id)) finalType = 'club';
               return { ...base, type: finalType };
             });
-          }, [settings.totalStudents, settings.emptyIds, settings.leaveIds, settings.clubIds, settings.bulkText]);
+          }, [settings.totalStudents, settings.emptyIds, settings.bulkText]);
 
-          // 自動為今天建立初始打卡清單，或遷移舊版打卡紀錄
+          // 自動為今天建立初始打卡清單（新的一天永遠乾淨為「未到」，不再繼承舊狀態）
           useEffect(() => {
             if (!isMounted) return;
             
@@ -328,25 +321,12 @@
                 if (todayList.length === (settings.totalStudents || 30)) return prev;
               }
 
+              // 新的一天，絕對全部是全新乾淨的未到狀態 (arrivalTime: null, status: 'absent')
               const baseList = generateBaseStudentList();
-              
-              // 💡 無縫相容升級：如果舊版 students_list 中有當日已打卡的紀錄，自動保留並搬移
-              const legacyHasCheckin = legacyStudents && legacyStudents.some(s => s.arrivalTime);
-              let initialDayList = baseList;
-              
-              if (legacyHasCheckin && (!prev || !prev[todayDateKey])) {
-                initialDayList = baseList.map(b => {
-                  const old = legacyStudents.find(l => l.id === b.id);
-                  if (old && old.arrivalTime) {
-                    return { ...b, arrivalTime: old.arrivalTime, status: old.status };
-                  }
-                  return b;
-                });
-              }
 
               return {
                 ...(prev || {}),
-                [todayDateKey]: initialDayList
+                [todayDateKey]: baseList
               };
             });
           }, [isMounted, todayDateKey, generateBaseStudentList, settings.totalStudents]);
@@ -359,6 +339,51 @@
             // 若該歷史日期完全無紀錄，動態產生當日預設名單供檢視
             return generateBaseStudentList();
           }, [attendanceRecords, currentViewDateKey, generateBaseStudentList]);
+
+          // 💡 當日請假與社團快速切換邏輯（依檢視日期獨立儲存）
+          const handleUpdateDayLeaveIds = (idsStr) => {
+            const leaveArr = idsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updated = currentList.map(s => {
+                if (s.type === 'empty') return s;
+                if (leaveArr.includes(s.id)) return { ...s, type: 'leave', arrivalTime: null, status: 'absent' };
+                if (s.type === 'leave') return { ...s, type: 'normal' };
+                return s;
+              });
+              return { ...prev, [currentViewDateKey]: updated };
+            });
+          };
+
+          const handleUpdateDayClubIds = (idsStr) => {
+            const clubArr = idsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updated = currentList.map(s => {
+                if (s.type === 'empty') return s;
+                if (clubArr.includes(s.id)) return { ...s, type: 'club', arrivalTime: null, status: 'absent' };
+                if (s.type === 'club') return { ...s, type: 'normal' };
+                return s;
+              });
+              return { ...prev, [currentViewDateKey]: updated };
+            });
+          };
+
+          const handleSetStudentType = (id, newType) => {
+            setAttendanceRecords(prev => {
+              const currentList = prev[currentViewDateKey] || currentDayStudents;
+              const updated = currentList.map(s => {
+                if (s.id !== id || s.type === 'empty') return s;
+                if (newType === 'normal') {
+                  return { ...s, type: 'normal', arrivalTime: null, status: 'absent' };
+                }
+                return { ...s, type: newType, arrivalTime: null, status: 'absent' };
+              });
+              return { ...prev, [currentViewDateKey]: updated };
+            });
+            setQuickActionStudent(null);
+            showToast(`✅ 座號 ${id} 已於 ${currentViewDateKey} 更新為【${newType === 'leave' ? '請假' : newType === 'club' ? '社團' : '一般/可打卡'}】`);
+          };
 
           // 預設今日聯絡簿測試資料
           useEffect(() => {
@@ -714,8 +739,35 @@
                             const isAbsent = s.status === 'absent';
                             const isLate = s.status === 'late';
 
+                            let touchTimer = null;
+
                             return (
-                              <button key={s.id} type="button" onClickCapture={(e) => { e.stopPropagation(); if (isNormal && isAbsent) handleCheckIn(s.id); }} className={`relative flex flex-col items-center justify-center rounded-2xl border-2 transition-all duration-300 shadow-sm group w-full h-full min-h-[80px] overflow-hidden ${isAbsent && isNormal ? 'bg-white border-slate-200 text-slate-600 hover:border-pink-300 hover:bg-pink-50 hover:-translate-y-0.5 cursor-pointer' : 'cursor-default'} ${s.status === 'on-time' ? 'bg-emerald-50 border-emerald-400 text-emerald-800' : ''} ${isLate ? 'bg-red-50 border-red-300 text-red-700' : ''} ${isLeave ? 'bg-orange-50 border-orange-300 text-orange-700 opacity-90' : ''} ${isClub ? 'bg-purple-50 border-purple-300 text-purple-700 opacity-90' : ''}`}>
+                              <button 
+                                key={s.id} 
+                                type="button" 
+                                onClickCapture={(e) => { 
+                                  e.stopPropagation(); 
+                                  if (isNormal && isAbsent) handleCheckIn(s.id); 
+                                }}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setQuickActionStudent(s);
+                                }}
+                                onTouchStart={(e) => {
+                                  touchTimer = setTimeout(() => {
+                                    setQuickActionStudent(s);
+                                  }, 550);
+                                }}
+                                onTouchEnd={() => {
+                                  if (touchTimer) clearTimeout(touchTimer);
+                                }}
+                                onTouchMove={() => {
+                                  if (touchTimer) clearTimeout(touchTimer);
+                                }}
+                                title="點擊打卡；按右鍵或長按可切換請假/社團狀態"
+                                className={`relative flex flex-col items-center justify-center rounded-2xl border-2 transition-all duration-300 shadow-sm group w-full h-full min-h-[80px] overflow-hidden ${isAbsent && isNormal ? 'bg-white border-slate-200 text-slate-600 hover:border-pink-300 hover:bg-pink-50 hover:-translate-y-0.5 cursor-pointer' : 'cursor-default'} ${s.status === 'on-time' ? 'bg-emerald-50 border-emerald-400 text-emerald-800' : ''} ${isLate ? 'bg-red-50 border-red-300 text-red-700' : ''} ${isLeave ? 'bg-orange-50 border-orange-300 text-orange-700 opacity-90' : ''} ${isClub ? 'bg-purple-50 border-purple-300 text-purple-700 opacity-90' : ''}`}
+                              >
                                 <span className="text-lg md:text-2xl lg:text-3xl font-black mb-0.5 opacity-100 pointer-events-none">{s.id}</span>
                                 {s.name && <span className="text-[11px] sm:text-[13px] md:text-[16px] font-black mb-0.5 truncate w-full px-1 leading-tight text-center tracking-wider pointer-events-none">{s.name}</span>}
                                 <span className={`text-[9px] md:text-[11px] font-black px-1.5 md:px-2 py-0.5 rounded-full tracking-wide shrink-0 pointer-events-none ${isAbsent ? 'bg-slate-100 text-slate-400' : 'bg-white/80 shadow-sm'}`}>{isLeave ? '請假' : isClub ? '社團' : (s.arrivalTime || '未到')}</span>
@@ -836,15 +888,79 @@
                       </section>
                       <section>
                         <h4 className="text-sm md:text-base font-bold text-slate-400 mb-3 border-b border-slate-100 pb-2 flex items-center gap-2">👥 打卡學生名單設定</h4>
+                        
+                        {/* 跨日通用設定 */}
                         <div className="mb-4 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
-                          <div className="absolute top-0 left-0 w-1 h-full bg-pink-400"></div><h5 className="font-bold text-slate-700 text-sm md:text-base mb-3 flex items-center">方式 A：僅使用數字座號 <span className="text-[10px] md:text-xs text-pink-600 bg-pink-100 px-2 py-0.5 rounded-full ml-2 font-black tracking-wide">優先使用</span></h5>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                            <div><label className="block text-sm font-bold text-slate-500 mb-1">總人數:</label><input type="number" min="1" max="100" value={settings.totalStudents} onChange={(e) => setSettings({...settings, totalStudents: parseInt(e.target.value) || 30})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-pink-300 outline-none" /></div>
-                            <div><label className="block text-sm font-bold text-slate-500 mb-1">空號 (逗號分隔):</label><input type="text" placeholder="例: 4,14" value={settings.emptyIds} onChange={(e) => setSettings({...settings, emptyIds: e.target.value})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-pink-300 outline-none" /></div>
-                            <div><label className="block text-sm font-bold text-slate-500 mb-1">請假號碼:</label><input type="text" placeholder="例: 7" value={settings.leaveIds} onChange={(e) => setSettings({...settings, leaveIds: e.target.value})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-pink-300 outline-none" /></div>
-                            <div><label className="block text-sm font-bold text-slate-500 mb-1">上社團號碼:</label><input type="text" placeholder="例: 12,15" value={settings.clubIds} onChange={(e) => setSettings({...settings, clubIds: e.target.value})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-pink-300 outline-none" /></div>
+                          <div className="absolute top-0 left-0 w-1 h-full bg-blue-400"></div>
+                          <h5 className="font-bold text-slate-700 text-sm md:text-base mb-3 flex items-center">
+                            全學期通用座號設定 <span className="text-[10px] md:text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full ml-2 font-black">跨日生效</span>
+                          </h5>
+                          <div className="grid grid-cols-2 gap-3 mb-2">
+                            <div><label className="block text-sm font-bold text-slate-500 mb-1">全班總人數:</label><input type="number" min="1" max="100" value={settings.totalStudents} onChange={(e) => setSettings({...settings, totalStudents: parseInt(e.target.value) || 30})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-blue-300 outline-none" /></div>
+                            <div><label className="block text-sm font-bold text-slate-500 mb-1">空號 (逗號分隔):</label><input type="text" placeholder="例: 4, 14" value={settings.emptyIds} onChange={(e) => setSettings({...settings, emptyIds: e.target.value})} className="w-full p-2 md:p-3 border border-slate-200 rounded-lg text-base bg-white focus:ring-2 focus:ring-blue-300 outline-none" /></div>
                           </div>
                         </div>
+
+                        {/* 💡 當日專屬出缺席設定（與日期綁定，換日自動還原） */}
+                        <div className="mb-4 bg-pink-50/60 p-4 rounded-xl border-2 border-pink-200 shadow-sm relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1.5 h-full bg-pink-500"></div>
+                          <div className="flex flex-wrap items-center justify-between gap-1 mb-2">
+                            <h5 className="font-black text-pink-800 text-sm md:text-base flex items-center gap-1.5">
+                              📅 當日出缺席設定 <span className="text-xs bg-pink-600 text-white px-2.5 py-0.5 rounded-full font-bold">僅針對 {currentViewDateKey}</span>
+                            </h5>
+                            <span className="text-[11px] font-bold text-pink-600 bg-pink-100 px-2 py-0.5 rounded-md">隔天自動恢復正常</span>
+                          </div>
+                          <p className="text-xs text-slate-600 mb-3 font-medium">若預先排定明日請假，在此輸入只會記錄在目前檢視日期（{currentViewDateKey}），不會影響今天與後續日期的名單。</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                            <div className="bg-white p-3 rounded-xl border border-pink-100 shadow-sm">
+                              <label className="block text-xs md:text-sm font-bold text-orange-700 mb-1">🍊 當日請假座號 (逗號分隔):</label>
+                              <input 
+                                type="text" 
+                                placeholder="例: 7, 15" 
+                                value={currentDayStudents.filter(s => s.type === 'leave').map(s => s.id).join(', ')} 
+                                onChange={(e) => handleUpdateDayLeaveIds(e.target.value)} 
+                                className="w-full p-2 border border-orange-200 rounded-lg text-sm md:text-base bg-white focus:ring-2 focus:ring-orange-300 outline-none" 
+                              />
+                            </div>
+                            <div className="bg-white p-3 rounded-xl border border-pink-100 shadow-sm">
+                              <label className="block text-xs md:text-sm font-bold text-purple-700 mb-1">🟣 當日上社團座號 (逗號分隔):</label>
+                              <input 
+                                type="text" 
+                                placeholder="例: 12, 18" 
+                                value={currentDayStudents.filter(s => s.type === 'club').map(s => s.id).join(', ')} 
+                                onChange={(e) => handleUpdateDayClubIds(e.target.value)} 
+                                className="w-full p-2 border border-purple-200 rounded-lg text-sm md:text-base bg-white focus:ring-2 focus:ring-purple-300 outline-none" 
+                              />
+                            </div>
+                          </div>
+
+                          {/* 快速點選座號切換按鈕區 */}
+                          <div>
+                            <span className="block text-xs font-bold text-slate-500 mb-2">⚡ 快速點擊座號切換狀態 (一般 ➔ 請假 ➔ 社團):</span>
+                            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto custom-scrollbar p-2 bg-white/80 rounded-xl border border-pink-100">
+                              {currentDayStudents.map(s => {
+                                if (s.type === 'empty') return null;
+                                const isLeave = s.type === 'leave';
+                                const isClub = s.type === 'club';
+                                const nextType = isLeave ? 'club' : isClub ? 'normal' : 'leave';
+                                return (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    onClickCapture={(e) => {
+                                      e.stopPropagation();
+                                      handleSetStudentType(s.id, nextType);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-black transition-transform active:scale-95 border ${isLeave ? 'bg-orange-100 text-orange-800 border-orange-300' : isClub ? 'bg-purple-100 text-purple-800 border-purple-300' : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'}`}
+                                  >
+                                    {s.id}{s.name ? ` ${s.name}` : ''}{isLeave ? ' (假)' : isClub ? ' (社)' : ''}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
                         <div className="mb-4 flex items-center justify-between bg-rose-50 p-4 rounded-xl border border-rose-100 shadow-sm">
                           <div className="flex items-center gap-3">
                             <Unlock className="text-rose-500 shrink-0 pointer-events-none" size={20}/><span className="text-sm md:text-base font-bold text-rose-700 shrink-0">強制解鎖 ({currentViewDateKey}):</span>
@@ -852,9 +968,10 @@
                             <button type="button" onClickCapture={(e) => { e.stopPropagation(); handleUnlock(); }} className="px-4 py-2 bg-rose-500 text-white rounded-lg text-sm md:text-base font-bold hover:bg-rose-600 shadow-sm transition-colors">執行</button>
                           </div>
                         </div>
+
                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
-                          <div className="absolute top-0 left-0 w-1 h-full bg-blue-400"></div><h5 className="font-bold text-slate-700 text-sm md:text-base mb-2">方式 B：匯入學生名單</h5>
-                          <textarea className="w-full h-32 p-3 border border-slate-200 rounded-xl text-base bg-white custom-scrollbar resize-y focus:ring-2 focus:ring-blue-300 outline-none leading-relaxed" placeholder="1,王小明&#10;2,陳小華" value={settings.bulkText} onChange={(e) => setSettings({...settings, bulkText: e.target.value})} />
+                          <div className="absolute top-0 left-0 w-1 h-full bg-slate-400"></div><h5 className="font-bold text-slate-700 text-sm md:text-base mb-2">方式 B：匯入學生名單 (座號+姓名)</h5>
+                          <textarea className="w-full h-32 p-3 border border-slate-200 rounded-xl text-base bg-white custom-scrollbar resize-y focus:ring-2 focus:ring-slate-300 outline-none leading-relaxed" placeholder="1,王小明&#10;2,陳小華" value={settings.bulkText} onChange={(e) => setSettings({...settings, bulkText: e.target.value})} />
                         </div>
                       </section>
                       <section>
@@ -891,6 +1008,52 @@
                     <div className="flex gap-4">
                       <button type="button" onClickCapture={(e) => { e.stopPropagation(); setIsResetConfirmOpen(false); }} className="flex-1 py-3.5 bg-slate-100 text-slate-600 font-bold rounded-xl transition-colors hover:bg-slate-200">取消</button>
                       <button type="button" onClickCapture={(e) => { e.stopPropagation(); handleResetCurrentDay(); }} className="flex-1 py-3.5 bg-red-500 text-white font-bold rounded-xl shadow-lg transition-colors hover:bg-red-600">確定重置</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 💡 學生快捷狀態切換選單（右鍵或長按觸發） */}
+              {quickActionStudent && (
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-[999999] p-4" onClick={() => setQuickActionStudent(null)}>
+                  <div className="bg-white rounded-3xl p-6 max-w-xs w-full text-center shadow-2xl border-2 border-pink-100" onClick={(e) => e.stopPropagation()}>
+                    <div className="w-14 h-14 bg-pink-100 text-pink-600 rounded-2xl flex items-center justify-center mx-auto mb-3 font-black text-2xl">
+                      {quickActionStudent.id}
+                    </div>
+                    <h4 className="text-lg font-black text-slate-800 mb-1">
+                      {quickActionStudent.name ? `${quickActionStudent.name} (座號 ${quickActionStudent.id})` : `座號 ${quickActionStudent.id}`}
+                    </h4>
+                    <p className="text-xs text-pink-600 font-bold mb-5">設定日期：{currentViewDateKey}</p>
+                    
+                    <div className="flex flex-col gap-2.5">
+                      <button
+                        type="button"
+                        onClickCapture={(e) => { e.stopPropagation(); handleSetStudentType(quickActionStudent.id, 'leave'); }}
+                        className="w-full py-2.5 px-4 bg-orange-50 hover:bg-orange-100 text-orange-700 font-black rounded-xl text-sm border border-orange-200 transition-colors flex items-center justify-center gap-2"
+                      >
+                        🍊 設為【請假】
+                      </button>
+                      <button
+                        type="button"
+                        onClickCapture={(e) => { e.stopPropagation(); handleSetStudentType(quickActionStudent.id, 'club'); }}
+                        className="w-full py-2.5 px-4 bg-purple-50 hover:bg-purple-100 text-purple-700 font-black rounded-xl text-sm border border-purple-200 transition-colors flex items-center justify-center gap-2"
+                      >
+                        🟣 設為【上社團】
+                      </button>
+                      <button
+                        type="button"
+                        onClickCapture={(e) => { e.stopPropagation(); handleSetStudentType(quickActionStudent.id, 'normal'); }}
+                        className="w-full py-2.5 px-4 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold rounded-xl text-sm border border-slate-200 transition-colors flex items-center justify-center gap-2"
+                      >
+                        ⚪ 恢復【一般 / 可打卡】
+                      </button>
+                      <button
+                        type="button"
+                        onClickCapture={(e) => { e.stopPropagation(); setQuickActionStudent(null); }}
+                        className="w-full py-2 text-slate-400 font-bold rounded-xl text-xs hover:text-slate-600 transition-colors mt-1"
+                      >
+                        關閉
+                      </button>
                     </div>
                   </div>
                 </div>
